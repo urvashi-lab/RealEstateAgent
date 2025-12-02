@@ -19,7 +19,8 @@ Metric selection rules:
 - "price", "rate", "cost" → "price"
 - "sales", "revenue" → "total_sales"
 - "flat sold", "apartment sold" → "flat_sold"
-- "office sold" → "office_sold"
+- "office sold" , "offices → "office_sold"
+- "shop sold", "shops sold", "retail sold", "store sold" ,"shops" → "shop_sold"
 - "demand" → "demand"
 - "units" → "units"
 

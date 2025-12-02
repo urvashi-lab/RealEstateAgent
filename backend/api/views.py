@@ -25,9 +25,9 @@ def build_dynamic_column_map(df):
     patterns = {
         "price": ["price", "rate", "avg price", "average price", "weighted", "cost"],
         "total_sales": ["total sales", "sales", "revenue", "turnover"],
-        "flat_sold": ["flat sold", "flats sold", "residential"],
-        "office_sold": ["office sold", "offices sold", "commercial"],
-        "shop_sold": ["shop sold", "shops sold", "retail"],
+        "flats_sold": ["flat sold", "flats sold", "residential"],
+        "offices_sold": ["office sold", "offices sold", "commercial"],
+        "shops_sold": ["shop sold", "shops sold", "retail"],
         "demand": ["demand", "booking", "interest"]
     }
 
@@ -45,6 +45,7 @@ def build_dynamic_column_map(df):
 def detect_metric_from_query(query, available_metrics):
     query = query.lower()
 
+    # First, try exact metric name match
     for metric in available_metrics:
         if metric.replace("_", " ") in query:
             return metric
@@ -52,12 +53,19 @@ def detect_metric_from_query(query, available_metrics):
     synonyms = {
         "price": ["price", "cost", "rate", "value"],
         "total_sales": ["sales", "revenue", "turnover"],
-        "flat_sold": ["flat", "flats", "apartment", "residential"],
-        "office_sold": ["office", "offices", "commercial"],
-        "shop_sold": ["shop", "shops", "retail"],
+        "flats_sold": ["flats sold", "flat sold", "apartment", "residential"],  # More specific phrases first
+        "offices_sold": ["offices sold", "office sold", "commercial office"],  # More specific phrases first
+        "shops_sold": ["shops sold", "shop sold", "retail shop"],  # More specific phrases first
         "demand": ["demand", "booking"]
     }
 
+    # Try multi-word phrases first (more specific)
+    for metric, words in synonyms.items():
+        for w in words:
+            if " " in w and w in query:  # Check phrases with spaces first
+                return metric
+    
+    # Then try single words
     for metric, words in synonyms.items():
         for w in words:
             if w in query:
@@ -127,6 +135,7 @@ def analyze(request):
         # Fallback to default file
         try:
             df = pd.read_excel("data.xlsx")
+            print(f"📊 ALL COLUMNS: {list(df.columns)}")  # Add this
         except Exception as e:
             return Response({
                 "error": "No file uploaded and failed to load default Excel", 
@@ -145,6 +154,7 @@ def analyze(request):
 
 
     COLUMN_MAP = build_dynamic_column_map(df)
+    print(f"🔍 DEBUG COLUMN_MAP: {COLUMN_MAP}")
     if not COLUMN_MAP:
         return Response({"error": "No metrics detected"}, status=500)
 
@@ -156,8 +166,34 @@ def analyze(request):
 
     areas = intent.get("areas") or [intent.get("area")]
     metric_key = intent.get("metric")
+    
     time_range = intent.get("time_range")
     print(f"📋 EXTRACTED: areas={areas}, metric={metric_key}, time_range={time_range}")
+
+    if metric_key and metric_key not in COLUMN_MAP:
+        # Try to find a matching key in COLUMN_MAP
+        metric_variants = [
+            metric_key,
+            metric_key + "s",  # singular -> plural (office_sold -> offices_sold)
+            metric_key.rstrip("s"),  # plural -> singular (offices_sold -> office_sold)
+            metric_key.replace("_sold", "s_sold"),  # office_sold -> offices_sold
+            metric_key.replace("s_sold", "_sold"),  # offices_sold -> office_sold
+        ]
+        
+        for variant in metric_variants:
+            if variant in COLUMN_MAP:
+                print(f"🔄 NORMALIZED METRIC: {metric_key} -> {variant}")
+                metric_key = variant
+                break
+        
+        # If still not found, try fuzzy matching with available metrics
+        if metric_key not in COLUMN_MAP:
+            for available_metric in COLUMN_MAP.keys():
+                # Check if they're similar (e.g., "office_sold" matches "offices_sold")
+                if metric_key.replace("s_", "_").replace("_", "") in available_metric.replace("_", ""):
+                    print(f"🔄 FUZZY MATCHED METRIC: {metric_key} -> {available_metric}")
+                    metric_key = available_metric
+                    break
 
     query_lower = query.lower()
     is_general_analysis = False
