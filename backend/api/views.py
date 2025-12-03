@@ -25,9 +25,9 @@ def build_dynamic_column_map(df):
     patterns = {
         "price": ["price", "rate", "avg price", "average price", "weighted", "cost"],
         "total_sales": ["total sales", "sales", "revenue", "turnover"],
-        "flats_sold": ["flat sold", "flats sold", "residential"],
-        "offices_sold": ["office sold", "offices sold", "commercial"],
-        "shops_sold": ["shop sold", "shops sold", "retail"],
+        "flat_sold": ["flat sold", "flat_sold", "flats sold", "residential"],  # Changed key to singular
+        "office_sold": ["office sold", "office_sold", "offices sold", "commercial"],  # Changed key to singular
+        "shop_sold": ["shop sold", "shop_sold", "shops sold", "retail"],  # Changed key to singular
         "demand": ["demand", "booking", "interest"]
     }
 
@@ -36,10 +36,14 @@ def build_dynamic_column_map(df):
             col_l = col.lower()
             if any(k in col_l for k in keywords):
                 column_map[metric_key] = col
+                # Also add plural versions pointing to same column
+                if "_sold" in metric_key:
+                    plural_key = metric_key.replace("_sold", "s_sold")
+                    column_map[plural_key] = col
                 break
 
+    print(f"🗺️ BUILT COLUMN_MAP: {column_map}")
     return column_map
-
 
 
 def detect_metric_from_query(query, available_metrics):
@@ -51,25 +55,35 @@ def detect_metric_from_query(query, available_metrics):
             return metric
 
     synonyms = {
+        "flat_sold": ["flats sold", "flat sold", "apartment", "residential unit"],
+        "office_sold": ["offices sold", "office sold", "commercial office"],
+        "shop_sold": ["shops sold", "shop sold", "retail shop", "store"],
         "price": ["price", "cost", "rate", "value"],
         "total_sales": ["sales", "revenue", "turnover"],
-        "flats_sold": ["flats sold", "flat sold", "apartment", "residential"],  # More specific phrases first
-        "offices_sold": ["offices sold", "office sold", "commercial office"],  # More specific phrases first
-        "shops_sold": ["shops sold", "shop sold", "retail shop"],  # More specific phrases first
         "demand": ["demand", "booking"]
     }
 
     # Try multi-word phrases first (more specific)
     for metric, words in synonyms.items():
         for w in words:
-            if " " in w and w in query:  # Check phrases with spaces first
-                return metric
+            if " " in w and w in query:
+                # Return the key if it exists in available_metrics
+                if metric in available_metrics:
+                    return metric
+                # Try plural version
+                plural_metric = metric.replace("_sold", "s_sold")
+                if plural_metric in available_metrics:
+                    return plural_metric
     
     # Then try single words
     for metric, words in synonyms.items():
         for w in words:
             if w in query:
-                return metric
+                if metric in available_metrics:
+                    return metric
+                plural_metric = metric.replace("_sold", "s_sold")
+                if plural_metric in available_metrics:
+                    return plural_metric
 
     return None
 
@@ -164,37 +178,54 @@ def analyze(request):
     except Exception as e:
         return Response({"error": "LLM failed", "details": str(e)}, status=500)
 
+   # ... after extracting intent ...
+    
     areas = intent.get("areas") or [intent.get("area")]
     metric_key = intent.get("metric")
     
     time_range = intent.get("time_range")
     print(f"📋 EXTRACTED: areas={areas}, metric={metric_key}, time_range={time_range}")
 
-    if metric_key and metric_key not in COLUMN_MAP:
-        # Try to find a matching key in COLUMN_MAP
-        metric_variants = [
-            metric_key,
-            metric_key + "s",  # singular -> plural (office_sold -> offices_sold)
-            metric_key.rstrip("s"),  # plural -> singular (offices_sold -> office_sold)
-            metric_key.replace("_sold", "s_sold"),  # office_sold -> offices_sold
-            metric_key.replace("s_sold", "_sold"),  # offices_sold -> office_sold
-        ]
-        
-        for variant in metric_variants:
-            if variant in COLUMN_MAP:
-                print(f"🔄 NORMALIZED METRIC: {metric_key} -> {variant}")
-                metric_key = variant
-                break
-        
-        # If still not found, try fuzzy matching with available metrics
+    # IMPROVED METRIC NORMALIZATION
+    if metric_key:
+        # Normalize the metric key to match COLUMN_MAP
         if metric_key not in COLUMN_MAP:
-            for available_metric in COLUMN_MAP.keys():
-                # Check if they're similar (e.g., "office_sold" matches "offices_sold")
-                if metric_key.replace("s_", "_").replace("_", "") in available_metric.replace("_", ""):
-                    print(f"🔄 FUZZY MATCHED METRIC: {metric_key} -> {available_metric}")
-                    metric_key = available_metric
+            # Try multiple normalization strategies
+            possible_keys = [
+                metric_key,
+                metric_key.rstrip("s"),  # offices_sold -> office_sold
+                metric_key + "s",  # office_sold -> office_solds
+                metric_key.replace("s_sold", "_sold"),  # offices_sold -> office_sold
+                metric_key.replace("_sold", "s_sold"),  # office_sold -> offices_sold
+                metric_key.replace("flat", "flat_sold").replace("_sold_sold", "_sold"),
+                metric_key.replace("office", "office_sold").replace("_sold_sold", "_sold"),
+                metric_key.replace("shop", "shop_sold").replace("_sold_sold", "_sold"),
+            ]
+            
+            # Add variations without underscores
+            base_metric = metric_key.replace("_", "")
+            for key in list(COLUMN_MAP.keys()):
+                if key.replace("_", "").replace("s", "") == base_metric.replace("s", ""):
+                    possible_keys.append(key)
+            
+            # Try to find a match
+            for variant in possible_keys:
+                if variant in COLUMN_MAP:
+                    print(f"🔄 NORMALIZED METRIC: {metric_key} -> {variant}")
+                    metric_key = variant
                     break
+            
+            # If still not found after all attempts
+            if metric_key not in COLUMN_MAP:
+                print(f"⚠️ Metric '{metric_key}' not in COLUMN_MAP. Attempting detection from query...")
+                detected = detect_metric_from_query(query, COLUMN_MAP.keys())
+                if detected:
+                    print(f"✅ Detected metric from query: {detected}")
+                    metric_key = detected
+                else:
+                    print(f"❌ Could not normalize or detect metric. Available: {list(COLUMN_MAP.keys())}")
 
+    # Rest of your code continues...
     query_lower = query.lower()
     is_general_analysis = False
     
@@ -268,8 +299,9 @@ def analyze(request):
     chart_metrics = []
     
     if is_general_analysis:
-        priority_metrics = ["flat_sold", "office_sold", "shop_sold", "demand"]
+        priority_metrics = ["flat_sold", "office_sold", "shop_sold", "demand"]  # Changed to singular
         available_metrics = [(k, v) for k, v in COLUMN_MAP.items() if k in priority_metrics and v in df.columns]
+        # ... rest of the code
         if not available_metrics:
             available_metrics = list(COLUMN_MAP.items())[:3]
         else:
