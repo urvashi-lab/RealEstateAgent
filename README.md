@@ -47,7 +47,7 @@ Deployed on Render:
 Follow these steps exactly in order:
 
 1️⃣ Clone the repository
-git clone <YOUR_BACKEND_REPO_URL>
+git clone (https://github.com/urvashi-lab/RealEstateAgent.git)
 cd backend
 
 2️⃣ Create & activate virtual environment
@@ -97,6 +97,7 @@ http://127.0.0.1:8000/
 Your frontend must point to:
 
 https://realestateagent-ol6i.onrender.com/api/analyze/
+
 https://realestateagent-ol6i.onrender.com/api/download-pdf/
 
 🤖 AI Integration (Groq LLM)
